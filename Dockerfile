@@ -1,6 +1,7 @@
 # Step 1: build a temporary image that will download official Arm GNU Toolchain from https://developer.arm.com/tools-and-software/open-source-software/developer-tools/gnu-toolchain/downloads
 FROM registry.access.redhat.com/ubi8/ubi as temporary
 
+USER root
 WORKDIR /tmp
 
 RUN yum install -y xz.x86_64 && \
@@ -10,6 +11,20 @@ RUN yum install -y xz.x86_64 && \
 # Step 2: create the final cross-compile image
 FROM registry.access.redhat.com/ubi8/ubi
 
+LABEL io.openshift.s2i.scripts-url="image:///s2i" \
+      io.s2i.scripts-url="image:///s2i"
+
+USER root
+
 COPY --from=temporary /tmp/gcc-arm-11.2-2022.02-x86_64-arm-none-linux-gnueabihf/ /opt/
 
+COPY ./s2i/ /s2i/
+
+RUN yum install -y make && \
+    yum clean all && \
+    rm -rf /var/cache/yum && \
+    ln -s /opt/bin/arm-none-linux-gnueabihf-gcc /opt/bin/gcc
+
 ENV PATH="${PATH}:/opt/bin"
+
+ENTRYPOINT ["/s2i/assemble"]
