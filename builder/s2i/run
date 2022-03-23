@@ -1,0 +1,3 @@
+#!/bin/bash -e
+
+echo "This image is not intended to be executable. Its purpos is solely to cros-compile source code"
