@@ -1,0 +1,361 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: buildah-s2i-multistage
+spec:
+  params:
+    - name: BUILDAH_IMAGE
+      default: registry.access.redhat.com/ubi8/buildah:8.5-4
+      description: The location of the buildah builder image.
+      type: string
+    - name: S2I_IMAGE
+      default: registry.access.redhat.com/ubi8/openjdk-11
+      description: The S2I builder image.
+      type: string
+    - name: IMAGE
+      description: Reference of the image buildah will produce.
+      type: string
+    - name: CONTEXT
+      default: .
+      description: Path to the directory to use as context.
+      type: string
+    - name: PUSH_EXTRA_ARGS
+      default: ''
+      description: Extra parameters passed for the push command when pushing images.
+      type: string
+    - name: TLSVERIFY
+      default: 'true'
+      description: >-
+        Verify the TLS on the registry endpoint (for push/pull to a non-TLS
+        registry)
+      type: string
+    - name: INCREMENTAL
+      type: string
+      default: "false"
+    - name: USER
+      type: string
+      default: "jboss"
+    - name: S2I_SCRIPTS_URL
+      type: string
+      default: "/usr/local/s2i"
+    - name: RUNTIME_IMAGE
+      description: Reference of the image buildah will produce.
+      type: string
+    - name: RUNTIME_ARTIFACT
+      description: The built artifact to copy.
+      type: string
+  results:
+    - description: Digest of the image just built.
+      name: IMAGE_DIGEST
+  workspaces:
+    - name: source
+    - name: artifacts
+    - name: varlibcontainers
+      mountPath: /var/lib/containers
+    - name: s2ienv
+  steps:
+    - name: build
+      image: $(params.BUILDAH_IMAGE)
+      env:
+        - name: INCREMENTAL
+          value: $(params.INCREMENTAL)
+        - name: BUILDER_IMAGE
+          value: $(params.S2I_IMAGE)
+        - name: ASSEMBLE_USER
+          value: $(params.USER)
+        - name: CONTEXT_DIR
+          value: $(params.CONTEXT)
+        - name: SCRIPTS_URL
+          value: $(params.S2I_SCRIPTS_URL)
+        - name: RUNTIME_IMAGE
+          value: $(params.RUNTIME_IMAGE)
+        - name: RUNTIME_ARTIFACT
+          value: $(params.RUNTIME_ARTIFACT)
+      script: |
+        #!/usr/bin/env bash
+        set -e
+
+        echo "Start"
+        builder=$(buildah from --tls-verify=$(params.TLSVERIFY) $BUILDER_IMAGE)
+
+        buildah add --chown $ASSEMBLE_USER:0 $builder $(workspaces.source.path)/$CONTEXT_DIR /tmp/src
+
+        if [ "$INCREMENTAL" = "true" ]; then
+
+          if [ -f "$(workspaces.artifacts.path)/artifacts.tar" ]; then
+           echo "Restoring artifacts"
+           buildah add --chown $ASSEMBLE_USER:0 $builder $(workspaces.artifacts.path)/artifacts.tar /tmp/artifacts
+          fi
+
+        fi
+
+        ENV=""
+        if [ -f "$(workspaces.source.path)/$CONTEXT_DIR/.s2i/environment" ]; then
+
+            while IFS="" read -r line
+            do
+              [[ "$line" =~ ^#.*$ ]] && continue
+              ENV+="-e $line "
+            done < $(workspaces.source.path)/$CONTEXT_DIR/.s2i/environment
+
+            echo "ENV is $ENV"
+
+        fi
+
+        if [ -f "$(workspaces.s2ienv.path)/environment" ]; then
+
+            while IFS="" read -r line
+            do
+              [[ "$line" =~ ^#.*$ ]] && continue
+              ENV+="-e $line "
+            done < $(workspaces.s2ienv.path)/environment
+
+            echo "ENV is $ENV"
+
+        fi
+
+        buildah config --cmd $SCRIPTS_URL/run $builder
+
+        if [ -x "$(workspaces.source.path)/$CONTEXT_DIR/.s2i/bin/assemble" ]; then
+          echo "Using assemble from .s2i"
+          eval buildah run $ENV $builder -- /tmp/src/.s2i/bin/assemble
+        else
+          echo "Using assemble from image"
+          eval buildah run $ENV $builder -- $SCRIPTS_URL/assemble
+        fi
+
+        if [ "$INCREMENTAL" = "true" ]; then
+
+          echo "saving artifacts"
+          if [ -f "$(workspaces.artifacts.path)/artifacts.tar" ]; then
+            rm $(workspaces.artifacts.path)/artifacts.tar
+          fi
+
+          buildah run $builder -- /bin/bash -c "if [ -x \"$SCRIPTS_URL/save-artifacts\" ]; then $SCRIPTS_URL/save-artifacts ; fi" > $(workspaces.artifacts.path)/artifacts.tar
+
+        fi
+        
+        if [ ! -z "$RUNTIME_IMAGE" ]; then
+          echo "Creating Runtime Image"
+          runner=$(buildah from --arch arm $RUNTIME_IMAGE)
+          buildah copy --chown $ASSEMBLE_USER:0 --from $builder $runner $RUNTIME_ARTIFACT $RUNTIME_ARTIFACT
+          buildah commit $runner $(params.IMAGE)
+          buildah rm $runner
+        else
+          echo "Not creating runtime image"
+          buildah commit $builder $(params.IMAGE)
+        fi
+
+        buildah rm $builder
+      securityContext:
+        privileged: true
+    - name: push
+      image: $(params.BUILDAH_IMAGE)
+      script: |
+        buildah push \
+          $(params.PUSH_EXTRA_ARGS) --tls-verify=$(params.TLSVERIFY) \
+          --digestfile $(results.IMAGE_DIGEST.path) $(params.IMAGE) \
+          docker://$(params.IMAGE)
+
+          cat $(results.IMAGE_DIGEST.path)
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: crosscompile-source-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: crosscompile-artifacts-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 4Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: crosscompile-varlibcontainers-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 4Gi
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: crosscompile-pipelineconfig
+data:
+  dev-image-path: 'image-registry.openshift-image-registry.svc:5000/crosscompile/crosscompile'
+  release-image-path: 'quay.io/gmagnotta/crosscompile'
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: crosscompile-s2ienvironment
+data:
+  environment: |
+    MAVEN_REPOS="nexus"
+    NEXUS_MAVEN_REPO_ID="nexus"
+    NEXUS_MAVEN_REPO_URL="http://nexus3:8081"
+    NEXUS_MAVEN_REPO_USERNAME="myuser"
+    NEXUS_MAVEN_REPO_PASSWORD="mypass"
+    #MAVEN_MIRRORS="nexus"
+    #NEXUS_MAVEN_MIRROR_ID="nexus"
+    #NEXUS_MAVEN_MIRROR_OF="<![CDATA[*]]>"
+    #NEXUS_MAVEN_MIRROR_URL="http://nexus3:8081/"
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: gcc-arm-11.2-2022.02
+spec:
+  lookupPolicy:
+    local: true
+  tags:
+  - annotations:
+      description: Cross compile toolchain
+    from:
+      kind: DockerImage
+      name: 'quay.io/gmagnotta/gcc-arm-11.2-2022.02'
+    name: latest
+    referencePolicy:
+      type: Local
+---
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: crosscompile-dev-pipeline
+spec:
+  params:
+    - name: repo-url
+  workspaces:
+    - name: src
+    - name: artifacts
+    - name: varlibcontainers
+    - name: empty
+    - name: s2ienv
+  tasks:
+    - name: fetch-repository
+      taskRef:
+        name: git-clone
+      workspaces:
+        - name: output
+          workspace: src
+      params:
+        - name: url
+          value: $(params.repo-url)
+        - name: deleteExisting
+          value: "true"
+    - name: get-dev-path
+      taskRef:
+        name: get-configmap-value
+      runAfter:
+        - fetch-repository
+      params:
+        - name: CONFIGMAP-NAME
+          value: "crosscompile-pipelineconfig"
+        - name: CONFIGMAP-KEY
+          value: "dev-image-path"
+    - name: build
+      taskRef:
+        name: buildah-s2i-multistage
+      runAfter:
+        - get-dev-path
+      workspaces:
+        - name: source
+          workspace: src
+        - name: varlibcontainers
+          workspace: varlibcontainers
+        - name: artifacts
+          workspace: artifacts
+        - name: s2ienv
+          workspace: s2ienv
+      params:
+        - name: USER
+          value: nobody
+        - name: S2I_IMAGE
+          value: "quay.io/gmagnotta/gcc-arm-11.2-2022.02:latest"
+        - name: S2I_SCRIPTS_URL
+          value: /s2i
+        - name: TLSVERIFY
+          value: "false"
+        - name: IMAGE
+          value: $(tasks.get-dev-path.results.VALUE)
+        - name: CONTEXT
+          value: "."
+        - name: INCREMENTAL
+          value: "false"
+        - name: RUNTIME_IMAGE
+          value: "registry.fedoraproject.org/fedora:32"
+        - name: RUNTIME_ARTIFACT
+          value: "/tmp/src/"
+    - name: update-built-image
+      taskRef:
+        name: set-configmap-value
+      runAfter:
+        - build
+      params:
+        - name: CONFIGMAP-NAME
+          value: "crosscompile-pipelineconfig"
+        - name: CONFIGMAP-KEY
+          value: "dev-latest-built-image"
+        - name: VALUE
+          value: $(tasks.get-dev-path.results.VALUE)@$(tasks.build.results.IMAGE_DIGEST)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: crosscompile-release-pipeline
+spec:
+  params:
+    - name: image-tag
+  workspaces:
+    - name: empty
+  tasks:
+    - name: get-image-built
+      taskRef:
+        name: get-configmap-value
+      params:
+        - name: CONFIGMAP-NAME
+          value: "crosscompile-pipelineconfig"
+        - name: CONFIGMAP-KEY
+          value: "dev-latest-built-image"
+    - name: getpushpath
+      taskRef:
+        name: get-configmap-value
+      params:
+        - name: CONFIGMAP-NAME
+          value: "crosscompile-pipelineconfig"
+        - name: CONFIGMAP-KEY
+          value: "release-image-path"
+    - name: copy
+      taskRef:
+        name: skopeo-copy
+        kind: ClusterTask
+      runAfter:
+        - getpushpath
+        - get-image-built
+      workspaces:
+        - name: images-url
+          workspace: empty
+      params:
+        - name: srcImageURL
+          value: "docker://$(tasks.get-image-built.results.VALUE)"
+        - name: destImageURL
+          value: "docker://$(tasks.getpushpath.results.VALUE):$(params.image-tag)"
+        - name: srcTLSverify
+          value: "false"
+        - name: destTLSverify
+          value: "false"
