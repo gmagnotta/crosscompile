@@ -24,8 +24,6 @@ RUN yum install -y make && \
     yum clean all && \
     rm -rf /var/cache/yum && \
     rm -rf /var/log/* && \
-    for i in /opt/bin/*; do C=`echo $i | cut -c 35-`; ln -s $i /opt/bin/$C; done
-
-ENV PATH="${PATH}:/opt/bin"
+    for i in /opt/bin/*; do C=`echo $i | cut -c 35-`; ln -s $i /usr/local/bin/$C; done
 
 ENTRYPOINT ["/s2i/assemble"]
