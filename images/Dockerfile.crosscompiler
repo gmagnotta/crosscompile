@@ -1,0 +1,17 @@
+# For raspberry pi without hard float use cc-arm-linux-gnueabi g++-arm-linux-gnueabi
+# For raspberry pi with hard float use gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+FROM debian:stable-slim as builder
+
+WORKDIR /tmp
+
+LABEL io.openshift.s2i.scripts-url="image:///s2i" \
+      io.s2i.scripts-url="image:///s2i"
+
+COPY ./s2i/ /s2i/
+
+RUN apt-get update && \
+    apt-get install -y libc6-armel-cross libc6-dev-armel-cross binutils-arm-linux-gnueabi libncurses5-dev build-essential bison flex libssl-dev bc \
+    gcc-arm-linux-gnueabi g++-arm-linux-gnueabi && \
+    apt-get clean
+
+ENTRYPOINT ["/s2i/assemble"]

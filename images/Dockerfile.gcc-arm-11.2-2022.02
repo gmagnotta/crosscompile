@@ -19,6 +19,8 @@ USER root
 COPY --from=temporary /tmp/gcc-arm-11.2-2022.02-x86_64-arm-none-linux-gnueabihf/ /opt/
 
 COPY ./s2i/ /s2i/
+COPY Makefile /tmp/src/
+COPY main.c /tmp/src/
 
 RUN yum install -y make && \
     yum clean all && \

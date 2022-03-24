@@ -1,0 +1,1 @@
+To build an image for a particular architecture, use `podman build --arch arm --variant v5 . -f Dockerfile`

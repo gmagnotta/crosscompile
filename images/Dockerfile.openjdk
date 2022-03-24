@@ -1,0 +1,16 @@
+# Step 1: downloaz zulu jdk11
+FROM debian:stable-slim as builder
+
+WORKDIR /tmp
+
+RUN apt-get update && \
+    apt-get install -y curl && \
+    curl https://cdn.azul.com/zulu-embedded/bin/zulu11.54.25-ca-jdk11.0.14.1-linux_aarch32sf.tar.gz -o /tmp/zulu11.54.25-ca-jdk11.0.14.1-linux_aarch32sf.tar.gz && \
+    tar xzvf zulu11.54.25-ca-jdk11.0.14.1-linux_aarch32sf.tar.gz
+
+# Step 2: copy extracted archive to final run image
+FROM debian:stable-slim
+
+COPY --from=builder /tmp/zulu11.54.25-ca-jdk11.0.14.1-linux_aarch32sf /opt/java
+
+ENV PATH="${PATH}:/opt/java/bin"

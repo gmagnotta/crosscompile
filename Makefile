@@ -1,2 +1,2 @@
 hello: main.c
-	gcc -o hello main.c -static
+	arm-linux-gnueabi-gcc -o hello main.c
