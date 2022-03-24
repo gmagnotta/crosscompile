@@ -65,7 +65,7 @@ fi
 if [ ! -z "$RUNTIME_IMAGE" ]; then
     echo "Creating Runtime Image"
     runner=$(buildah from --arch arm --variant v5 $RUNTIME_IMAGE)
-    buildah copy --chown nobody:0 --from $builder $runner $RUNTIME_ARTIFACT $RUNTIME_ARTIFACT
+    buildah copy --chown $ASSEMBLE_USER:0 --from $builder $runner $RUNTIME_ARTIFACT $RUNTIME_ARTIFACT
     buildah config --workingdir /deployments $runner
     buildah config --entrypoint '["./hello"]' $runner
     buildah config --cmd '[]' $runner

@@ -114,8 +114,6 @@ spec:
 
         fi
 
-        buildah config --cmd $SCRIPTS_URL/run $builder
-
         if [ -x "$(workspaces.source.path)/$CONTEXT_DIR/.s2i/bin/assemble" ]; then
           echo "Using assemble from .s2i"
           eval buildah run $ENV $builder -- /tmp/src/.s2i/bin/assemble
@@ -137,12 +135,16 @@ spec:
         
         if [ ! -z "$RUNTIME_IMAGE" ]; then
           echo "Creating Runtime Image"
-          runner=$(buildah from --arch arm $RUNTIME_IMAGE)
+          runner=$(buildah from --arch arm --variant v5 $RUNTIME_IMAGE)
           buildah copy --chown $ASSEMBLE_USER:0 --from $builder $runner $RUNTIME_ARTIFACT $RUNTIME_ARTIFACT
+          buildah config --workingdir /deployments $runner
+          buildah config --entrypoint '["./hello"]' $runner
+          buildah config --cmd '[]' $runner
           buildah commit $runner $(params.IMAGE)
           buildah rm $runner
         else
           echo "Not creating runtime image"
+          buildah config --cmd $SCRIPTS_URL/run $builder
           buildah commit $builder $(params.IMAGE)
         fi
 
@@ -286,7 +288,7 @@ spec:
         - name: USER
           value: nobody
         - name: S2I_IMAGE
-          value: "quay.io/gmagnotta/gcc-arm-11.2-2022.02:latest"
+          value: "quay.io/gmagnotta/crosscompiler"
         - name: S2I_SCRIPTS_URL
           value: /s2i
         - name: TLSVERIFY
@@ -298,9 +300,9 @@ spec:
         - name: INCREMENTAL
           value: "false"
         - name: RUNTIME_IMAGE
-          value: "registry.fedoraproject.org/fedora:32"
+          value: "debian:stable-slim"
         - name: RUNTIME_ARTIFACT
-          value: "/tmp/src/"
+          value: "/deployments"
     - name: update-built-image
       taskRef:
         name: set-configmap-value
